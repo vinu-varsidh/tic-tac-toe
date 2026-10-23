@@ -50,6 +50,16 @@ Winner: Alice
 
 All paths are under `src/main/java/com/tictactoe/`.
 
+## Rules and invariants
+
+- Coordinates are zero-based: `(0, 0)` is the top-left cell.
+- X always moves first, and turns alternate only after an accepted move.
+- A move is accepted only while the game is in progress and the target cell is in bounds and empty.
+- A rejected move is atomic from the caller's perspective: the board, move count, status, and current player stay unchanged.
+- A player wins by filling an entire row, column, or diagonal. On an N x N board this means N marks; shorter K-in-a-row rules are not implemented.
+- A winning final move takes precedence over a draw.
+- After a win or draw, the state is terminal and further moves throw `GameOverException`.
+
 ## Class diagram
 
 ```mermaid
@@ -170,24 +180,49 @@ sequenceDiagram
     Game-->>Client: GameStatus
 ```
 
-## Design decisions
+## Design walkthrough
 
-| Decision | Rationale |
-|----------|-----------|
-| **`Game` / `Board` split** | `Board` knows cells and lines only; `Game` knows players, turns and status. Each has one reason to change (SRP). |
-| **`Board` is package-private** | Callers can only mutate state via `Game.playMove`, so turn order and status can never be bypassed. |
-| **`Player` as a record** | Immutable value object; validation lives in the compact constructor, and the name is stripped. |
-| **Win check only around the last move** | Only lines through the placed cell can become complete, so we check at most 4 lines: O(N) per move versus O(N²) for a full scan. |
-| **Win is checked before draw** | A final move that fills the board *and* completes a line is a win, not a draw (covered by a check). |
-| **Validate-then-mutate** | `placeMark` validates fully before writing, so a rejected move leaves board, turn and status untouched; the player can simply retry. |
-| **Custom exceptions** | `InvalidMoveException` (recoverable, retry) and `GameOverException` (terminal) let callers react differently, unlike a generic `IllegalArgumentException`. |
-| **`synchronized` on `Game`** | Check-then-act on turn/status is a race otherwise. One coarse lock is simple and correct for a 2-player game; `Board` stays lock-free because `Game` guards it. |
-| **Rendering outside the domain** | `BoardRenderer` depends on `Game`, not vice versa, so a GUI or web layer can replace it without touching game logic. |
-| **Configurable board size** | Win logic is size-agnostic (a full row/column/diagonal of N). Classic game = `new Game(x, o, 3)`. |
+### One boundary owns the game
+
+`Game` is the public facade for a match. It owns the two players, whose turn it is, and the current `GameStatus`. `Board` owns only the N x N grid, the accepted-move count, and line detection. This split keeps match orchestration separate from board mechanics without creating an interface for every class.
+
+`Board` is package-private by design. If callers could place marks on it directly, they could bypass turn order and continue writing after a win. Keeping it behind `Game` makes one method, `playMove`, the consistency boundary. The cost is a handful of query methods on `Game`, but that duplication is preferable to exposing mutable state.
+
+This is facade-style encapsulation rather than a large GoF pattern hierarchy: there is one simple entry point over a smaller internal object.
+
+### A move either completes or changes nothing
+
+`playMove` first rejects a terminal game. It then asks `Board` to place the current mark. `Board` validates the mark, coordinates, and occupancy before touching the array or move counter. Because mutation happens only after validation, an invalid move needs no rollback: the same player keeps the turn and every observable value remains unchanged.
+
+The exception types preserve that distinction for clients. `InvalidMoveException` means the input can be corrected and retried; `GameOverException` means the match is terminal. Returning a `MoveResult` instead would make expected failures explicit, but it would add another public type and force callers to inspect it after every move. Exceptions keep this small API direct, at the cost of requiring clients to handle normal invalid-input paths.
+
+After placement, `Game` checks for a win before checking whether the board is full. That order is important: when the final empty cell also completes a line, the result is a win rather than a draw. Only a non-terminal move switches the current player, so after the game ends `currentPlayer` still refers to the last mover.
+
+### Win detection follows the last move
+
+A new winning line must pass through the cell that was just filled. `Board` therefore scans only that row, that column, and either diagonal when the coordinates lie on it. A move takes O(N) time instead of rescanning all N² cells. Reading or placing a cell is O(1), draw detection is O(1), and rendering is O(N²). The board itself uses O(N²) space.
+
+Per-row, per-column, and diagonal counters could reduce win detection to O(1), but they would duplicate more state and make each move harder to reason about. For a small turn-based board, the O(N) scan is the clearer tradeoff. The existing move counter is a smaller piece of duplicated state used to detect a draw in O(1); restricting all mutation to `Board` keeps that counter aligned with the grid.
+
+The rule is intentionally "N in a row on an N x N board." Supporting K-in-a-row would introduce a real variation point and justify extracting a win-rule strategy. Until then, a `WinningStrategy` interface would add indirection without changing behavior.
+
+### Thread safety sits at the same boundary
+
+Every public method on `Game` is synchronized. This makes the full check-place-evaluate-switch sequence atomic and ensures readers observe a consistent status, player, move count, and board. `Board` needs no independent locking because it is accessible only through its owning `Game`.
+
+The tradeoff is coarse serialization: even reads wait behind a move. Fine-grained locks or compare-and-set state could allow more concurrency, but they would complicate an object whose writes are naturally sequential turns. The single monitor favors correctness and auditability over throughput.
+
+### Domain and presentation stay separate
+
+`Player` is an immutable record, while `Mark` and `GameStatus` are enums. These are value-like domain objects with no setters or partial states. `BoardRenderer` sits outside the domain and only reads the `Game` API, so replacing console output with a web or GUI adapter does not change game rules.
+
+There is no renderer interface yet because only one renderer exists. Likewise, the code does not use Factory, Observer, or AI Strategy patterns: object creation is trivial, nobody subscribes to moves, and move selection is outside the domain. Those abstractions become useful only when a second implementation or an actual extension requirement appears.
 
 ## Testing
 
-`TicTacToeVerification` runs 34 checks covering all win directions, draws, a win on the final move, rejected moves, input validation, boards of several sizes, and concurrent play. It exits non-zero on any failure.
+`TicTacToeVerification` runs 16 scenarios containing 34 assertions. They cover both winners, every win direction, draws, a win on the final move, turn alternation, rejected moves, input validation, 1x1/4x4/5x5 boards, and concurrent submissions to a 10x10 game. It exits non-zero on any failure.
+
+The concurrency scenario checks state consistency under contention; it is not a deterministic proof of every possible thread interleaving. The verification class is also not wired into Maven's `test` phase, so run it explicitly with the command in **Quick start**.
 
 ## Limitations and possible extensions
 

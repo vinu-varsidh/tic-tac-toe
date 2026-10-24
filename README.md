@@ -6,6 +6,16 @@ An N x N Tic-Tac-Toe domain model with turn management, strict move validation, 
 
 **Requirements:** Java 17+ (records, switch expressions).
 
+## Highlights
+
+- Configurable square boards, including 1x1 and larger-than-classic games
+- Atomic move processing with strict turn and terminal-state enforcement
+- O(N) win detection based on the last accepted move
+- Thread-safe public game API using one synchronization boundary
+- Domain-specific exceptions with no partial mutation on failure
+- UI-independent model with a replaceable text presentation layer
+- Zero runtime dependencies; Maven is used only for build tooling
+
 ## Quick start
 
 With Maven:
@@ -35,6 +45,40 @@ Expected demo output:
 Status: X_WON
 Winner: Alice
 ```
+
+## API usage
+
+```java
+Game game = new Game("Alice", "Bob", 3);
+
+int[][] moves = {{0, 0}, {1, 0}, {0, 1}, {1, 1}, {0, 2}};
+for (int[] move : moves) {
+    game.playMove(move[0], move[1]); // coordinates are zero-based
+}
+
+System.out.print(BoardRenderer.render(game));
+game.getWinner().ifPresent(winner ->
+        System.out.println("Winner: " + winner.name()));
+
+try {
+    game.playMove(2, 2);
+} catch (GameOverException e) {
+    System.out.println(e.getMessage());
+}
+```
+
+For an out-of-bounds or occupied cell, catch `InvalidMoveException` and ask the same player to retry; the failed call does not change the game.
+
+The main `Game` API is intentionally small:
+
+| API | Purpose |
+|-----|---------|
+| `new Game(xName, oName, size)` | Creates a match; X always starts. |
+| `playMove(row, col)` | Atomically places the current mark and returns the resulting status. |
+| `getCurrentPlayer()` | Returns the next player, or the last mover after completion. |
+| `getStatus()` / `getWinner()` | Exposes lifecycle state and an optional winner. |
+| `getCell(row, col)` | Reads one validated board position. |
+| `getBoardSize()` / `getMoveCount()` | Exposes immutable size and accepted-move count. |
 
 ## Project layout
 
@@ -194,6 +238,27 @@ sequenceDiagram
 | **Renderer outside the domain** | Console, GUI, or web presentation can change without touching game rules. | No renderer interface until a second implementation creates a real need. |
 
 Strategy, Factory, and Observer were not added because the current rules, construction, and event flow have no corresponding variation point.
+
+## Complexity and failure behavior
+
+For a board of size N:
+
+| Operation | Complexity | Reason |
+|-----------|------------|--------|
+| Place or read a cell | O(1) | Direct array access after bounds validation. |
+| Check for a win | O(N) | Scans only the affected row, column, and eligible diagonals. |
+| Check for a draw | O(1) | Compares the accepted-move count with N². |
+| Render the board | O(N²) | Visits every cell. |
+| Board storage | O(N²) | Stores one mark reference per cell. |
+
+Failures are explicit and preserve state:
+
+| Condition | Result | State after failure |
+|-----------|--------|---------------------|
+| Coordinates are outside the board | `InvalidMoveException` | Unchanged; same player's turn. |
+| Cell is already occupied | `InvalidMoveException` | Unchanged; move count does not increase. |
+| Move is attempted after win/draw | `GameOverException` | Terminal state remains unchanged. |
+| Name is null/blank or size is below 1 | `IllegalArgumentException` | Construction fails; no game is created. |
 
 ## Testing
 

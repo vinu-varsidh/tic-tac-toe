@@ -260,11 +260,7 @@ Failures are explicit and preserve state:
 | Move is attempted after win/draw | `GameOverException` | Terminal state remains unchanged. |
 | Name is null/blank or size is below 1 | `IllegalArgumentException` | Construction fails; no game is created. |
 
-## Testing
-
-`TicTacToeVerification` runs 16 scenarios containing 34 assertions. They cover both winners, every win direction, draws, a win on the final move, turn alternation, rejected moves, input validation, 1x1/4x4/5x5 boards, and concurrent submissions to a 10x10 game. It exits non-zero on any failure.
-
-The concurrency scenario checks state consistency under contention; it is not a deterministic proof of every possible thread interleaving. The verification class is also not wired into Maven's `test` phase, so run it explicitly with the command in **Quick start**.
+**Verification:** `TicTacToeVerification` runs 34 checks covering wins, draws, invalid moves, board sizes, and concurrent access. Run it with the command in **Quick start**.
 
 ## Limitations and possible extensions
 

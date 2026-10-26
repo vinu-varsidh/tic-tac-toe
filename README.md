@@ -6,6 +6,8 @@ An N x N Tic-Tac-Toe domain model with turn management, strict move validation, 
 
 **Requirements:** Java 17+ (records, switch expressions).
 
+> **New to the design?** Read [LLD/DEEP_DIVE.md](LLD/DEEP_DIVE.md) for the full walkthrough, per-class decisions and invariants.
+
 ## Highlights
 
 - Configurable square boards, including 1x1 and larger-than-classic games
